@@ -1,5 +1,180 @@
 # Terraform — `for_each` vs `count`
 
+🌐 **Language / Idioma:** [English](#english-version) | [Português](#versão-em-português)
+
+---
+
+# English Version
+
+> Practical example of using `for_each` in Terraform to dynamically provision Azure resources:  
+> **Resource Group → Virtual Network → Subnets (with optional NSG)**
+
+---
+
+## Project Structure
+
+```
+.
+├── main.tf        # Provider and Terraform version
+├── variables.tf   # Input variables (including subnet map)
+├── resource.tf    # Azure resources created with for_each
+├── output.tf      # Outputs with created resource IDs
+└── README.md
+```
+
+---
+
+## Prerequisites
+
+- [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.3
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) authenticated (`az login`)
+- Azure Subscription ID
+
+---
+
+## How to Use
+
+```bash
+# 1. Edit main.tf and replace "YourSubscriptionID" with your actual Subscription ID
+# 2. Initialize Terraform
+terraform init
+
+# 3. Review the plan
+terraform plan
+
+# 4. Apply
+terraform apply
+```
+
+---
+
+## File-by-File Explanation
+
+### `main.tf` — Provider and Terraform Version
+
+```hcl
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.50.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+  subscription_id = "YourSubscriptionID"
+}
+```
+
+**What it does:**  
+- Declares that the project uses the `azurerm` provider from HashiCorp, version `~> 3.50.0` (accepts patches, but not major/minor upgrades).
+- Configures access credentials to the Azure subscription.
+
+---
+
+### `variables.tf` — Input Variables
+
+```hcl
+variable "vnet_config" {
+  type = object({
+    name          = string
+    address_space = list(string)
+    subnets = map(object({
+      address_prefixes = list(string)
+      security_group   = bool
+    }))
+  })
+  ...
+}
+```
+
+**What it does:**  
+- Defines a complex type (`object` with an inner `map`) to describe the VNet and all its subnets in a single block.
+- Each entry in the `subnets` map has:
+  - `address_prefixes` — subnet CIDR
+  - `security_group` — boolean flag to indicate whether an NSG should be associated
+
+**Why this approach?**  
+Grouping configuration into a single `object` centralizes definitions and makes it easier to pass values via `terraform.tfvars` or modules, without managing separate variables for each subnet.
+
+---
+
+### `resource.tf` — Azure Resources with `for_each`
+
+```hcl
+resource "azurerm_subnet" "subnets" {
+  for_each = var.vnet_config.subnets
+
+  name                 = each.key
+  address_prefixes     = each.value.address_prefixes
+  ...
+}
+```
+
+**What it does:**  
+- Creates one `azurerm_subnet` instance **for each entry** in the `subnets` map.
+- `each.key` → subnet name (e.g. `snet-frontend`)
+- `each.value` → object with `address_prefixes` and `security_group`
+
+---
+
+## `for_each` vs `count` — When to Use Each?
+
+| Criteria | `count` | `for_each` |
+|---|---|---|
+| **Input type** | Integer number | `set(string)` or `map(any)` |
+| **Item access** | `count.index` (numeric position) | `each.key` / `each.value` (semantic identifier) |
+| **State identity** | `resource[0]`, `resource[1]` | `resource["snet-frontend"]` |
+| **Remove 1 item from the middle** | ⚠️ Recreates all subsequent resources | ✅ Removes only the targeted item |
+| **Map/object input** | ✅ Simple to use with flat lists | ✅ Ideal with maps and objects |
+| **Readability** | Poor (numeric index) | High (resource name) |
+
+### Why prefer `for_each`?
+
+1. **Stable state** — each resource is identified by its *key*, not its *position*. Removing `snet-backend` from a list managed with `count` would destroy and recreate `snet-frontend` (index shift). With `for_each`, only `snet-backend` is removed.
+
+2. **Traceability** — in `terraform state list` you see `azurerm_subnet.subnets["snet-frontend"]` instead of `azurerm_subnet.subnets[0]`, making audits and debugging easier.
+
+3. **Expressiveness** — the code describes **what** is being created, not **how many** items.
+
+4. **Maps with metadata** — `for_each` iterates over maps, allowing each item to carry extra attributes (like `security_group = true`), which is not natively possible with `count`.
+
+### When to still use `count`?
+
+- Creating N identical replicas (e.g. 3 identical load VMs where position doesn't matter).
+- Conditional resources: `count = var.enable_feature ? 1 : 0`.
+
+---
+
+## Outputs
+
+After `terraform apply`, the outputs return:
+
+```hcl
+vnet_id    = "/subscriptions/.../virtualNetworks/vnet-corporativa"
+subnet_ids = {
+  "AzureFirewallSubnet" = "/subscriptions/.../subnets/AzureFirewallSubnet"
+  "snet-backend"        = "/subscriptions/.../subnets/snet-backend"
+  "snet-frontend"       = "/subscriptions/.../subnets/snet-frontend"
+}
+```
+
+The output uses a **for expression** (`{ for k, v in ... : k => v.id }`) to transform the resource map into a map of IDs — a complementary technique to `for_each`.
+
+---
+
+## License
+
+MIT
+
+---
+
+---
+
+# Versão em Português
+
 > Exemplo prático de uso do `for_each` no Terraform para provisionar recursos Azure de forma dinâmica:  
 > **Resource Group → Virtual Network → Subnets (com NSG opcional)**
 
